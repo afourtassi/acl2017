@@ -4,6 +4,8 @@ Acl2017 is a R-package that includes a [R Markdown](http://rmarkdown.rstudio.com
 ## Important note!!!
 Sadly, the way R Markdown automatically handles citations ends up basically "hardcoding" the citations in to the .tex file.  Unfortunately, ACL wants a very specific (and very restrictive) way of citing, so I have had to brutalize my perfect adopted baby so that it can actually work with what ACL wants.  That means knitting is now a two-step process. Read the instructions in the automatically generated `.Rmd` file for more information about what to do.
 
+The [final `.Rmd` file](https://raw.githubusercontent.com/burchill/acl2017/master/CMCL2017.Rmd), and the [PDF file I eventually knitted from it](https://raw.githubusercontent.com/burchill/acl2017/master/CMCL2017.pdf), are also available, named `CMCL2017.Rmd` and `CMCL2017.pdf`.
+
 
 ## Setup
 ### Requirements

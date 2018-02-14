@@ -1,0 +1,662 @@
+---
+title: "Grounding sound change in ideal observer models of perception"
+bibliography: eacl2017.bib
+csl: apa6.csl
+
+author-information: > 
+    \author{{\large \bf Zachary J. Burchill} \\ Dept. of Brain \& Cognitive Sciences \\ University of Rochester \\ \texttt{zburchil@ur.rochester.edu}
+    \And {\large \bf T. Florian Jaeger} \\ Dept. of Brain \& Cognitive Sciences \\ University of Rochester \\ \texttt{fjaeger@ur.rochester.edu}}
+ 
+header-includes:
+  - \usepackage{tipa}
+  - \usepackage{placeins}
+
+abstract: 
+    "An important predictor of historical sound change, functional load, fails to capture insights from speech perception. Building on ideal observer models of word recognition, we devise a new definition of functional load that incorporates both \\emph{a priori} expectedness and perceptual information. We explore this new measure with a simple model and find that it outperforms traditional measures."
+
+final_submission: yes
+# If yes, uncomment line below and add your own ID
+eaclpaperid: "25"
+
+# Uncomment and change if you want a smaller titlebox; minimum length is 5cm
+titlebox_length: "5cm"
+
+output: acl2017::acl_paper
+---
+
+```{r global_options, include=FALSE}
+rm(list=ls())
+knitr::opts_chunk$set(fig.width=3, fig.height=3, fig.crop = F, fig.pos = "tb", fig.path='figs/',
+                      echo=F, warning=F, cache=F, message=F, sanitize = T)
+```
+
+```{r, libraries}
+library(magrittr)
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(ggplot2)
+library(Hmisc)
+library(gridExtra)
+library(ggrepel)
+library(viridis)
+
+library(knitr)
+
+library(png)
+library(grid)
+library(xtable)
+```
+
+```{r functions}
+weighted_average <-function(df) {
+  total_frequency=sum(10^(df$Frequency))
+  return(sum(df$Confusability*(10^df$Frequency))/total_frequency)
+}
+
+modify <- function(l) {
+  # return this as an expression
+  substr(format(l),2,99)
+}
+
+g_legend<-function(a.gplot){ 
+  tmp <- ggplot_gtable(ggplot_build(a.gplot)) 
+  leg <- which(sapply(tmp$grobs, function(x) x$name) == "guide-box") 
+  legend <- tmp$grobs[[leg]] 
+  return(legend)
+} 
+
+g_x_axis<-function(a.gplot){ 
+  tmp <- ggplot_gtable(ggplot_build(a.gplot))
+  leg <- which(grepl("axis.title.x",sapply(tmp$grobs, function(x) x$name)))
+  legend <- tmp$grobs[[leg]] 
+  return(legend)
+} 
+
+get_good_names<-function(names,vowelies=FALSE) {
+  if (vowelies) {
+    return(sapply(names,function(x) sub("vowels|consonants","",x),USE.NAMES = FALSE))
+  }
+  names <- as.character(names)
+  if (grepl("swap",names[1])) {
+    indices <- sapply(names,function(x) 
+      which(strsplit(x,"_")[[1]]=="swap")[1],USE.NAMES = FALSE)
+  }
+  else {
+    indices <- sapply(names,function(x) 
+      which(strsplit(x,"_")[[1]]=="to")[1],USE.NAMES = FALSE)
+  }
+  new_names <- mapply(function(index,name) {
+                        paste0(strsplit(name,"_")[[1]][index-1],
+                               "_to_",
+                               strsplit(name,"_")[[1]][index+1])
+                      },indices,names,
+                      USE.NAMES = FALSE)
+  new_names <- ifelse(new_names=="NA_to_NA",names,new_names)
+  return(new_names)
+}
+density_extractor<-function(vals,kernel_v,bw_v,from_v) {
+  density_table<-density(vals,kernel = kernel_v, bw=bw_v,from = from_v)
+  new_ys<-approx(density_table$x,density_table$y,xout=vals)$y
+  return(new_ys)
+}
+prob_getter <- function(vals,min) {
+  kdr <- ks::kde(x=vals,xmin=min)
+  probs <- ks::pkde(fhat=kdr, q=vals)
+  return(probs)
+}
+```
+
+```{r load baseline}
+new_regular <- read.csv("~/Box Sync/CMCL2017/baseline.csv")
+new_regular$Name <- "regular"
+new_regular$Type <- "Baseline"
+
+old_regular <- read.csv("~/Box Sync/CMCL2017/old_baseline.csv")
+old_regular$Name <- "regular"
+old_regular$Type <- "Baseline"
+```
+
+# Introduction
+
+Whether a phonemic contrast (e.g., /t/ vs /d/) merges over historical time has been taken to depend on its **functional load**---essentially its utility in distinguishing different meanings [@gillieron1918genealogie; @jakobson1931prinzipien; @malthesius1931zum]. Traditionally, functional load is operationalized as the number of minimal pair words distinguished only by the contrast (e.g., for the /t/-/d/ contrast, the words _ten_ and _den_). Studies based on this measure have found higher functional load to be associated with lowered likelihood of merging [@wedel2013high]. However, traditional measures of functional load fail to capture important properties from speech perception  that are critical if one seeks to understand how a phonological contrast adds to word identification in actual language use. Specifically, research on speech perception has found that the functional contribution of phonemic contrasts to word identification depends on: 
+
+i. the _degree_ to which the contrast is perceptually distinguishable, 
+ii. the _degree_ to which the contrast gradiently adds to the distinction between _any_ pair of words, not only minimal pairs,
+iii. the _interaction_ of (i) and (ii): how the perceptual distinguishability affects word recognition depends on the word’s specific phonological neighbors. 
+
+Building on ideal observer models of spoken word recognition [e.g., @norris2008shortlist; see also @luce1998recognizing], we integrate (i)-(iii) into a revised definition of functional load. We then evaluate this novel definition empirically. 
+
+# Theoretical model
+
+In order to understand the amount of "work" a contrast does, we first seek to understand the implications of _losing_ the contrast. Traditionally functional load is thought of as the number of meaning distinctions lost when a contrast disappears. Our revised definition measures functional load as the overall decrease in _probability_ of correctly recognizing meaning. We measure functional load by first calculating the confusion in the system with the contrast in place, then, merging the contrast in question, re-calculate the confusion of the system without the contrast and measure the difference. For the present purpose, we follow previous work and operationalize meanings as lexical entries (or short, words). Thus:
+
+\begin{equation} 
+  \label{eq:1} 
+  \begin{aligned}
+    FL_{c} =  &\textup{E[p}(\mathrm{CorrectWordRecognition}_{\textup{with c}})] -  \\
+    &\textup{E[p}(\mathrm{CorrectWordRecognition}_{\textup{without c}})]
+  \end{aligned} 
+\end{equation}
+
+\noindent Equation (\ref{eq:1}) defines functional load as the expected value (i.e. the mean) of the probability of correct word recognition when the system has the contrast $c$ minus the expected value for the same language without the contrast. In this paper we entertain two conceptualizations for the expected value: one for which each word/meaning type is equally important (which we shall refer to as _type-based_ functional load) and one in which words are weighted by their relative frequencies (_token-based_ functional load). 
+
+Taking context into account, the type-based expected value of the probability of recognizing a word (i.e.: $\textup{E[p}(CorrectWordRecognition)]$) would be equivalent to taking the average of the probabilities of recognizing all words in the lexicon, i.e.:
+
+\begin{equation} 
+  \label{eq:2} 
+  \frac{\sum_{w_{s}}^{L} f(\textup{p}(w_{h}|w_{s},ctxt))}{|L|}
+\end{equation}
+
+\noindent where $L$ is the set of word types in the lexicon, $w_{s}$ is the word spoken by the talker, $w_{h}$ is the word heard by the interlocutor, and $ctxt$ is the context the word was spoken in. $f$ is a function of the choice rule that determines $\textup{p}(w_{h}=w_{s}|w_{s},ctxt)$ from the distribution of all potentially heard words, $\textup{p}(w_{h}|w_{s},ctxt)$. For example, $f$ could be the _criterion rule_ [@green1966signal] whereby the probability of the listener correctly recognizing the word is calculated as the probability that the intended word has the highest chance of being heard out of all other candidates.
+
+Token-based functional load can be formulated similarly, but instead of merely averaging the probabilities of recognizing each word, one takes the weighted average, where each probability is weighted by the word's frequency:
+
+\begin{equation} 
+  \label{eq:3}
+  \frac{\sum_{w_{s}}^{L} \textup{p}(w_{s}|ctxt)\cdot \textup{p}(ctxt) \cdot f(\textup{p}(w_{h}|w_{s},ctxt))}{\sum_{w_{s}}^{L} \textup{p}(w_{s}|ctxt)\cdot \textup{p}(ctxt)}
+\end{equation}
+
+These two approaches make different claims about the pressures on language change---token-based accounts imply that the average number of misrecognitions exerts the pressure, whereas type-based accounts would suggest the number of meanings confused is most important. Similar distinctions have been made previously, for example, @martinet1952function and @hockett1955manual argue that lexical frequency should affect functional load, similar to how we weigh probabilities of recognition in our token-based account. Conceivably, either approach might better capture how languages change, or perhaps some higher-level utility function weighs words' relative importance (e.g., words that have greater utility in recognizing contribute more). One of the benefits of our modeling approach is that we can quantitatively compare the two accounts.
+
+Our proposal shares with entropic accounts [e.g., @hockett1967quantification; @surendran2003measuring; @surendran2006quantifying] that it incorporates the _probability_ of recognizing words (via contextual predictability). However, the present proposal also incorporates perceptual confusability.  On the other hand, ideal observer models predict that word recognition depends on both perceptual distinguishability and contextual predictability (capturing both bottom-up and top-down influences on word recognition). We therefore estimate $f(\textup{p}(w_{h}=w_{i}|w_{i},ctxt))$, the probability of correctly recognizing word $w_{i}$, by comparing the _perceptual_ confusability of $w_{i}$ with all other words in the lexicon, weighted by frequency [following @luce1998recognizing].
+
+# Approach
+
+## Estimating word recognition rates
+
+Although contextual predictability could be included in future versions of our model, we ignore it for simplicity's sake, essentially approximating rates of isolated word recognition. We calculate the predicted probability of recognizing an isolated word $w_{i}$ as:
+
+\begin{equation} \label{eq:fwnpr}
+\scalebox{1.25}{
+  $\frac{\textup{PerceptualConfusability}(w_{i},w_{i}) \cdot \log Freq_{i}}{\sum_{j \in L}^{} \textup{PerceptualConfusability}(w_{j},w_{i}) \cdot \log Freq_{j}}$}
+\end{equation}
+
+\noindent where the $L$ is the set of all word forms in the lexicon (i.e. pairwise calculations with $w_{i}$ and every other word form, $w_{j}$, including itself). The general formulation of Equation (\ref{eq:fwnpr}) follows @luce1998recognizing, using Luce's choice rule [@luce1959individual, i.e. hearing each word out of all the alternatives at a probability equal to the probability that particular word, also known as probability-matching].  In essence, the numerator is a measure of how likely the listener is to hear the phones in $w_{i}$ correctly, weighted by frequency of $w_{i}$. The denominator is the frequency-weighted sum of the probabilities of mishearing the phones in $w_{i}$ as all other possible words.
+
+We estimate the perceptual confusability of two strings of phones, $\textup{PerceptualConfusability}(x_{j},x_{i})$, as the product of the probabilities of confusing phones in the first string ($x_{i}$) with phones at the same locations in the second string ($x_{j}$), using probabilities from a phoneme-to-phoneme confusion matrix we built with perceptual data collected from @cutler2004patterns.
+
+\begin{equation} \label{eq:percept_confuse}
+  \textup{PerceptualConfusability}(x_{j},x_{i}) = \prod_{a=1}^{n} \mathrm{P}(p_{aj}|p_{ai})
+\end{equation}
+
+\noindent where $n$ is the number of phones in $x_{i}$ and $\mathrm{P}(p_{aj}|p_{ai})$ represents the conditional probability of hearing the $a$th phone in $x_{i}$ ($p_{ai}$) as the $a$th phone in $x_{j}$ ($p_{aj}$). The formulation of Equation (\ref{eq:percept_confuse}) currently entails that we are only considering words of equal length to the target when calculating perceptual confusion. Future work can consider deletion and insertion confusions [cf. @levy2008noisy].
+
+With the phonological data from the CMU Pronouncing Dictionary [@weide1998cmu] and lexical frequencies collected from the SUBTLEX-US frequency database [@brysbaert2009moving], we can estimate the probability of correctly recognizing over 42,000 word forms of American English. The recognition rates predicted by this method have been shown to mirror properties of spoken word recognition [e.g., frequency and phonological neighborhood effects, @luce1998recognizing]. Combining these data, we can calculate $\textup{E[p}(CorrectWordRecognition_{\textup{with c}})]$ from (\ref{eq:1}).
+
+## Simulating contrast loss
+
+The perceptual confusion matrix our model uses can be considered an estimate of the perceptual distinguishability of all phonemes in English as it exists currently. To simulate a hypothetical version of English that _does not_ contain a certain contrast, we can artificially manipulate the confusion matrix our model uses to make the phonemes in the contrast perceptually indistinguishable.
+
+For example, to simulate a variety in English in which there is no longer a distinction between /t/ and /d/, we can redistribute the probability mass of the confusion matrix so that p(/t/$_{heard}$|/d/$_{spoken}$) = p(/t/$_{heard}$|/t/$_{spoken}$) and vice versa (Figure \ref{fig:confusion}). The probability that a listener would recognize a /t/ as a /t/ would then be equal to the probability they recognize the phoneme as a /d/. Combining this altered confusion matrix with (\ref{eq:fwnpr}), we can rerun our model, calculating the average probability of correctly recognizing words without the contrast, and estimate $\textup{E[p}(CorrectWordRecognition_{\textup{without c}})]$.
+
+```{r image, fig.env = "figure", fig.pos = "H", fig.align='center', fig.width=3, fig.height=1.747, set.cap.width=T, num.cols.cap=1, fig.cap = "Manipulating the probability mass in the phoneme-to-phoneme confusion matrix to simulate losing the /t/-/d/ contrast.\\label{fig:confusion}"}
+img <- png::readPNG("figs/confusion_matrix.png")
+grid::grid.raster(img)
+```
+
+
+# Verifying our model's properties
+
+Earlier, we stated that a definition of functional load that captures what is known about spoken word recognition should depend on (i)-(iii). In the follow sections, we verify that our model captures these properties (though under simplifying assumptions). 
+\setlength{\parskip}{0pt}
+
+```{r load_graph_data}
+
+simian_12 <- readRDS("~/Box Sync/CMCL2017/graph_1_main_data.RDS")
+#teeny_simian_type <- readRDS("~/Box Sync/CMCL2017/graph_1_label_data.RDS")
+#teeny_simian_token <- readRDS("~/Box Sync/CMCL2017/graph_1_label_data_token.RDS")
+
+# saveRDS(teeny_simian_token, "~/Box Sync/CMCL2017/graph_1_label_data_token.RDS")
+ # saveRDS(simian_12,"~/Box Sync/CMCL2017/graph_1_main_data.RDS")
+# saveRDS(teeny_simian_token,"~/Documents/CMCL2017/graph_1_label_data_token.RDS")
+
+```
+
+```{r 2-col-image, fig.env = "figure*", fig.pos = "h", fig.width=6, fig.height=2, fig.align = "center", set.cap.width=T, num.cols.cap=2, fig.cap = "Twenty randomly chosen mergers demonstrating the complex relationship of perception, phonotactics, and the lexicon (with Arpabet labels). Size and color of dots indicate the \\emph{a priori} perceptual confusability of the contrast, as estimated by the original confusion matrix. Axes are scaled independently. The red lines show the increase in the contrast's functional load had the contrast originally been perfectly perceptually distinct---in essence, the sensitivity of the contrast's functional load to its \\emph{a priori} confusability.\\label{fig:big_graph}"}
+
+#simian_12$LogOddsAvgConf<-qlogis(simian_12$AvgConf)
+
+new_simian <- simian_12 %>% 
+    tidyr::gather("FLAccount","FL",FL,FL2) %>%
+    tidyr::gather("ReducedFLAccount","ReducedFL",ReducedFL,ReducedFL2) %>%
+    filter((FLAccount == "FL" & ReducedFLAccount == "ReducedFL") |
+           (FLAccount == "FL2" & ReducedFLAccount == "ReducedFL2")) %>%
+    select(-ReducedFLAccount,-ReducedMu,-ReducedMu2)
+
+new_simian_line <- new_simian %>%
+    tidyr::gather("ReducedOrNot","FL",FL,ReducedFL)
+
+new_simian_labels <- new_simian %>%
+  subset((Name %in% c("UW1_to_UH1","T_to_M","T_to_D","AO1_to_AH1","AE1_to_EH1")) |
+         (Name %in% c("TH_to_B") & FLAccount=="FL2") |
+         (Name %in% c("AY1_to_OW1","UW1_to_OW1","Y_to_D") & FLAccount=="FL")) %>%
+  mutate(Name = sapply(Name,function(x) sub("_to_","-",sub("1","",sub("1","",x))),
+                       USE.NAMES=FALSE))
+
+fl_labeller <- function(variable,value){
+  fl_names <- list('FL'="Token-based",'FL2'="Type-based")
+  return(fl_names[value])
+}
+
+new_simian %>%
+  ggplot(aes(x=FL, y=MinPairs, color=AvgConf, size=AvgConf)) + 
+  geom_point() +
+  geom_point(color="red",data=new_simian,
+             aes(x=ReducedFL,y=MinPairs),
+             inherit.aes=FALSE) +
+  geom_line(color="red",data = new_simian_line,
+            aes(x=FL, y=MinPairs, group=Name), inherit.aes=FALSE) +
+  scale_size(range=c(3,6), guide=FALSE) +
+  scale_colour_gradientn("Perceptual\nConfusability",colours=viridis(256)) +
+  xlab("Functional Load") +
+  ylab("Number of Minimal Pairs") +
+  facet_wrap(~FLAccount, scales = "free", ncol = 1, labeller=fl_labeller, strip.position="right") +
+  geom_label_repel(aes(label=Name), color="black",size=2,alpha=0.7,
+                   data=new_simian_labels, force=10,
+                 box.padding = unit(0.5, "lines"),
+                 min.segment.length = unit(0.0, "lines"),
+                 show.legend = FALSE) +
+  theme(axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.text = element_text(size=rel(0.7)),
+        legend.title = element_text(size=rel(0.9)),
+        legend.key.height = unit(0.19,"in")) +
+  coord_cartesian(ylim=c(-15, 320))
+
+
+
+# type_based <- simian_12 %>%
+#   subset(FL2Type=="FL2") %>%
+#   ggplot(aes(x=FL2,y=MinPairs,color=AvgConf,size=AvgConf)) + 
+#   geom_point() +
+#   geom_point(color="red",data=simian_12 %>% subset(FL2Type=="ReducedFL2"),
+#              aes(x=FL2,y=MinPairs),
+#              inherit.aes=FALSE) +
+#   geom_line(color="red",data = simian_12,aes(x=FL2,y=MinPairs,group=Name),inherit.aes=FALSE) +
+#   scale_size(range=c(3,6),guide=FALSE) +
+#   scale_colour_gradientn("Perceptual\nConfusability",colours=viridis(256)) +
+#   xlab("New Functional Load (Type-based)") +
+#   ylab("Number of Minimal Pairs") +
+#   geom_label_repel(aes(label=Name),color="black",size=3,alpha=0.7,
+#                    data=teeny_simian_type, force=10,
+#                  box.padding = unit(0.5, "lines"),
+#                  min.segment.length = unit(0.0, "lines"),
+#                  show.legend = FALSE) +
+#   coord_cartesian(ylim=c(-5, 310)) +
+#   theme(legend.position = c(0.80, .84),
+#         legend.direction = "horizontal",
+#         legend.background = element_blank(),
+#         legend.text = element_text(size=rel(0.7)),
+#         legend.title = element_text(size=rel(0.9)),
+#         legend.key.width = unit(0.23,"in"),
+#         legend.key.height = unit(0.15,"in"))
+# 
+# token_based <- simian_12 %>%
+#   subset(FLType=="FL") %>%
+#   ggplot(aes(x=FL, y=MinPairs, color=AvgConf, size=AvgConf)) + 
+#   geom_point() +
+#   geom_point(color="red",data=simian_12 %>% subset(FLType=="ReducedFL"),
+#              aes(x=FL, y=MinPairs),
+#              inherit.aes=FALSE) +
+#   geom_line(color="red", data = simian_12, aes(x=FL, y=MinPairs, group=Name), inherit.aes=FALSE) +
+#   scale_size(range=c(3,6), guide=FALSE) +
+#   scale_colour_gradientn("Perceptual\nConfusability", colours=viridis(256)) +
+#   xlab("New Functional Load (Token-based)") +
+#   ylab("Number of Minimal Pairs") +
+#   geom_label_repel(aes(label=Name), color="black",size=3,alpha=0.7,
+#                    data=teeny_simian_token, force=10,
+#                  box.padding = unit(0.5, "lines"),
+#                  min.segment.length = unit(0.0, "lines"),
+#                  show.legend = FALSE) +
+#   coord_cartesian(ylim=c(-5, 310)) +
+#   theme(#legend.position = c(0.80, .84),
+#         #legend.direction = "horizontal",
+#         #legend.background = element_blank(),
+#         legend.text = element_text(size=rel(0.7)),
+#         legend.title = element_text(size=rel(0.8)))
+# 
+# sense_legend <- g_legend(token_based)
+# type_token_sense_layout <- rbind(c(1,2,3))
+# 
+# grid.arrange(type_based + theme(legend.position="none"),
+#              token_based + theme(axis.title.y=element_blank(),
+#                                  axis.text.y=element_blank(),
+#                                  axis.ticks.y=element_blank(),
+#                                  legend.position="none"),
+#              sense_legend,
+#              ncol=3, nrow=1,
+#              layout_matrix=type_token_sense_layout,
+#              widths=c(5,4,1), heights=c(2))
+# 
+# 
+# layout1 <- rbind(c(1,2),
+#                  c(3,2))
+# 
+# #qplot(1,1)
+# 
+# # knitr::include_graphics("~/Documents/comparison.pdf")
+# 
+# grid.arrange(type_based + theme(legend.position="none"),
+#              sense_legend,
+#              token_based + theme(axis.title.y=element_blank(),
+#                                  axis.text.y=element_blank(),
+#                                  axis.ticks.y=element_blank(),
+#                                  legend.position="none"),
+#              
+#              ncol=2,nrow=2,
+#              layout_matrix=layout1,
+#              widths=c(6,0.85),heights=c(2,3))
+# 
+# # type_based
+# 
+# # type_token_sense_layout <- rbind(c(1,2))
+# # grid.arrange(type_based + theme(legend.position="none") +
+# #                           xlab("Functional load (Type-based)"),
+# #              token_based + theme(axis.title.y=element_blank(),
+# #                                  axis.text.y=element_blank(),
+# #                                  axis.ticks.y=element_blank(),
+# #                                  legend.margin = unit(0,"line")) +
+# #                             xlab("Functional load (Token-based)"),
+# #              ncol=2, nrow=1,
+# #              layout_matrix=type_token_sense_layout,
+# #              widths=c(6,7), heights=c(2))
+
+```
+
+
+
+## Revised functional load depends on contrasts' _a priori_ perceptual distinguishability
+
+Phonemes differ in their ease of recognition and differentiation acoustically and perceptually [@miller1955analysis; @wang1973consonant; @cutler2004patterns]. Some phonemes are harder to correctly recognize than others, and some contrasts are more readily confused. The loss of a phonemic contrast with high _a priori_ perceptual confusability will affect word recognition less than losing a contrast between two very perceptually distinct phonemes, all other things being equal. For example, the /\textipa{A}/-/\textipa{O}/ contrast in American English has low perceptual distinguishability, even in non-merging dialects [@cutler2004patterns]. Losing this contrast increased predicted misrecognition rates by 6.6%. In comparison, removal of the same contrast in a simulated version of English where /\textipa{A}/-/\textipa{O}/ are highly distinct (i.e., the original confusability reduced by 80%) increased misrecognition rates by 10.1%.
+\setlength{\parskip}{0pt}
+
+```{r load last graph data}
+# saveRDS(mega_df_func,"~/Box\ Sync/CMCL2017/labphon_third_graph_data_with_stillsteel.RDS")
+# saveRDS(mega_df,"~/Box\ Sync/CMCL2017/labphon_third_graph_data_part2_with_stillsteel.RDS")
+# saveRDS(weighted_mean_labels,"~/Box\ Sync/CMCL2017/weighted_mean_labels.RDS")
+# saveRDS(unweighted_mean_labels,"~/Box\ Sync/CMCL2017/unweighted_mean_labels.RDS")
+mega_df_func <- readRDS("~/Box\ Sync/CMCL2017/labphon_third_graph_data_with_stillsteel.RDS")
+mega_df <- readRDS("~/Box\ Sync/CMCL2017/labphon_third_graph_data_part2_with_stillsteel.RDS")
+weighted_mean_labels <- readRDS("~/Box\ Sync/CMCL2017/weighted_mean_labels.RDS")
+unweighted_mean_labels <- readRDS("~/Box\ Sync/CMCL2017/unweighted_mean_labels.RDS")
+
+# mega_df_func <- readRDS("~/Box\ Sync/CMCL2017/labphon_third_graph_data.RDS")
+# mega_df <- readRDS("~/Box\ Sync/CMCL2017/labphon_third_graph_data_part2.RDS")
+# 
+# weighted_mean_labels <- mega_df %>%
+#   group_by(Merger) %>%
+#   mutate(probs=prob_getter(WeightedMean,1-weighted_average(old_regular))) %>%
+#   mutate(probs=probs-min(probs)) %>%
+#   ungroup() %>%
+#   subset(Type=="ActualMerger") %>%
+#   mutate(probs=sapply(probs,function(x) sprintf("%.2f",x),USE.NAMES=FALSE)) %>% select(Name,Merger,Type,WeightedMean,probs)
+# 
+# unweighted_mean_labels <-mega_df %>%
+#   group_by(Merger) %>%
+#   mutate(probs=prob_getter(UnWeightedMean,1-mean(old_regular$Confusability))) %>%
+#   mutate(probs=probs-min(probs)) %>%
+#   ungroup() %>%
+#   subset(Type=="ActualMerger") %>%
+#   mutate(probs=sapply(probs,function(x) sprintf("%.2f",x),USE.NAMES=FALSE)) %>% select(Name,Merger,Type,UnWeightedMean,probs)
+
+
+
+```
+
+
+```{r token based graph}
+weighted <- mega_df %>% ggplot(aes(x=Merger,
+                       y=WeightedMean/(1-weighted_average(old_regular)),
+                       color=Type)) +
+  stat_summary(data = mega_df[mega_df$Type=="RandomMerger",],
+               geom="point",
+               fun.y=mean,
+               size=3) +
+  geom_point(data = mega_df[mega_df$Type=="RandomMerger",],
+             position = position_jitter(0.25),
+             alpha=0.2) +
+  geom_violin(data = mega_df[mega_df$Type=="RandomMerger",],
+              alpha=0) +
+#   stat_summary(geom="errorbar",width=0.5,
+#                data = mega_df[mega_df$Type=="RandomMerger",],
+#                fun.data=mean_cl_boot) + 
+  ylab("New FL (Token)") +
+  scale_color_discrete(name="Type of merger", 
+                       breaks=c("ActualMerger","RandomMerger"),
+                       labels=c("Attested","Chance")) +
+  geom_point(data = mega_df[mega_df$Type=="ActualMerger",],
+             size=3) +
+  theme(legend.position = c(0.25, .75),
+        strip.background = element_blank(),
+        strip.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank()) + 
+  facet_wrap(~Merger,nrow=1,scales = "free") +
+  geom_text_repel(aes(label=paste0("         p<",probs)),
+                  color="black",
+                   data=weighted_mean_labels,
+                  segment.size = 0,
+                   box.padding = unit(0.5, "lines"),
+                   show.legend = FALSE)
+```
+
+```{r type-based graph}
+unweighted <- mega_df %>% ggplot(aes(x=Merger,
+                       y=UnWeightedMean/(1-mean(old_regular$Confusability)),
+                       color=Type)) +
+  stat_summary(data = mega_df[mega_df$Type=="RandomMerger",],
+               geom="point",
+               fun.y=mean,
+               size=3) +
+  geom_point(data = mega_df[mega_df$Type=="RandomMerger",],
+             position = position_jitter(0.25),
+             alpha=0.2) +
+  geom_violin(data = mega_df[mega_df$Type=="RandomMerger",],
+              alpha=0) +
+#   stat_summary(geom="errorbar",width=0.5,
+#                data = mega_df[mega_df$Type=="RandomMerger",],
+#                fun.data=mean_cl_boot) + 
+  ylab("New FL (Type)") +
+  scale_color_discrete(name="Type of merger", 
+                       breaks=c("ActualMerger","RandomMerger"),
+                       labels=c("Attested","Random")) +
+  geom_point(data = mega_df[mega_df$Type=="ActualMerger",],
+             size=3) +
+  theme(legend.position = c(0.25, .75),
+        strip.background = element_blank(),
+        strip.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank()) +
+  facet_wrap(~Merger,nrow=1,scales = "free") +
+  geom_text_repel(aes(label=paste0("         p<",probs)),
+                  color="black",
+                   data=unweighted_mean_labels,
+                  segment.size = 0,
+                   box.padding = unit(0.5, "lines"),
+                   show.legend = FALSE)
+```
+
+```{r minimal pairs graph}
+minpairs_labels <- mega_df_func %>%
+  group_by(Merger) %>%
+  mutate(probs=prob_getter(MinPairs,0)) %>%
+  mutate(probs=probs-min(probs)) %>%
+  ungroup() %>%
+  subset(Type=="ActualMerger") %>%
+  mutate(probs=sapply(probs,function(x) sprintf("%.2f",x),USE.NAMES=FALSE)) %>%
+  select(Name,Merger,Type,MinPairs,probs)
+
+minpairs <- mega_df_func %>% ggplot(aes(x=Merger,
+                       y=MinPairs,
+                       color=Type)) +
+  stat_summary(data = mega_df_func[mega_df_func$Type=="RandomMerger",],
+               geom="point",
+               fun.y=mean,
+               size=3) +
+  geom_point(data = mega_df_func[mega_df_func$Type=="RandomMerger",],
+             position = position_jitter(0.25),
+             alpha=0.2) +
+  geom_violin(data = mega_df_func[mega_df_func$Type=="RandomMerger",],
+              alpha=0) +
+  geom_point(data = mega_df_func[mega_df_func$Type=="ActualMerger",],
+             size=3) +
+#   stat_summary(geom="errorbar",width=0.5,
+#                data = mega_df_func[mega_df_func$Type=="RandomMerger",],
+#                fun.data=mean_cl_boot) + 
+  ylab("Minimal Pairs") +
+  scale_color_discrete(name="Merger: ", 
+                       breaks=c("ActualMerger","RandomMerger"),
+                       labels=c("Attested","Chance")) +
+  theme(#legend.position = c(0.25, .75),
+        strip.background = element_blank(),
+        strip.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank()) +
+  facet_wrap(~Merger,nrow=1,scales = "free") +
+  geom_text_repel(aes(label=paste0("         p<",probs)),
+                  color="black",
+                   data=minpairs_labels,
+                  segment.size = 0,
+                   box.padding = unit(0.5, "lines"),
+                  force=3,
+                   show.legend = FALSE)
+```
+
+```{r comparison_graph, fig.env = "figure*", fig.pos = "h", fig.width=6.3, fig.height=3.5, fig.align = "center", set.cap.width=T, num.cols.cap=2, fig.cap = "The functional loads of six attested mergers in North American English each compared to 20 randomly generated mergers in the same environments, measured by models implementing our new definition of functional load vs. the traditional measure of number of minimal pairs. The probability that a sample drawn from the distribution of random mergers has less than or equal functional load than the attested merger is indicated. Axes are scaled independently for each plot.\\label{fig:comparison_graph}"}
+
+# comp_legend<-g_legend(minpairs + theme(legend.key.width = unit(2, "mm")))
+# 
+# layout1 <- rbind(c(1,2),
+#                  c(3,2),
+#                  c(4,2))
+# 
+# #qplot(1,1)
+# 
+# # knitr::include_graphics("~/Documents/comparison.pdf")
+# 
+# grid.arrange(unweighted + xlab("") +
+#                scale_color_discrete(guide=FALSE) +
+#                theme(axis.text.x=element_blank(),
+#                      axis.ticks.x=element_blank(),
+#                      axis.title.y = element_text(size=rel(0.75))) +
+#                labs(x=NULL),
+#              comp_legend,
+#              weighted + xlab("") +
+#                scale_color_discrete(guide=FALSE) +
+#                theme(axis.text.x=element_blank(),
+#                      axis.ticks.x=element_blank(),
+#                      axis.title.y = element_text(size=rel(0.75))) +
+#                labs(x=NULL),
+#              minpairs + scale_color_discrete(guide=FALSE) +
+#                theme(axis.title.y = element_text(size=rel(0.75))) +
+#                scale_x_discrete(breaks=c("Caught-Cot Merger","Fool-Full Merger","Pin-Pen Merger","Still-Steel Merger","TH-Fronting","TH-Stopping"),
+#                                 labels=c("Caught-Cot Merger","Fool-Full Merger","Pin-Pen Merger","Still-Steel Merger","Think-Fink Merger\n(TH-fronting)","Thin-Tin Merger\n(TH-Stopping")),
+#              ncol=2,nrow=3,
+#              layout_matrix=layout1,
+#              widths=c(6,0.85),heights=c(2,2,3))
+
+
+comp_legend<-g_legend(minpairs + theme(legend.position = "top",
+                                       legend.text = element_text(size=8),
+                                       legend.title  = element_text(size=9),
+                                       legend.key.size = unit(0.1,"in")))
+layout1 <- rbind(c(1),
+                 c(2),
+                 c(3),
+                 c(4))
+
+grid.arrange(comp_legend,
+             unweighted + xlab("") +
+               scale_color_discrete(guide=FALSE) +
+               theme(axis.text.x=element_blank(),
+                     axis.ticks.x=element_blank(),
+                     axis.title.y = element_text(size=rel(0.75))) +
+               labs(x=NULL),
+             weighted + xlab("") +
+               scale_color_discrete(guide=FALSE) +
+               theme(axis.text.x=element_blank(),
+                     axis.ticks.x=element_blank(),
+                     axis.title.y = element_text(size=rel(0.75))) +
+               labs(x=NULL),
+             minpairs + scale_color_discrete(guide=FALSE) +
+               theme(axis.title.y = element_text(size=rel(0.75))) +
+               scale_x_discrete(breaks=c("Caught-Cot Merger","Fool-Full Merger","Pin-Pen Merger","Still-Steel Merger","TH-Fronting","TH-Stopping"),
+                                labels=c("Caught-Cot Merger","Fool-Full Merger","Pin-Pen Merger","Still-Steel Merger","Think-Fink Merger\n(TH-fronting)","Thin-Tin Merger\n(TH-Stopping")),
+             ncol=1,nrow=4,
+             layout_matrix=layout1,
+             widths=c(6.85),heights=c(0.3,2,2,3))
+```
+
+
+## Contrast loss affects more than just minimal pairs
+\setlength{\parskip}{0pt}
+
+Traditional functional load---including recent extensions [@surendran2006quantifying; @wedel2013high]---fail to capture the fact that real-world spoken word recognition is influenced by word-to-word confusability beyond the confusability of minimal pairs. For example, the perceptual confusability of pairs like /g\textipa{A}t/ and /c\textipa{O}t/ will never be taken into account, yet these two words are likely to be relatively confusable, even in American dialects that preserve the /\textipa{A}/-/\textipa{O}/ distinction. Following a /g/-/k/ merger, /g\textipa{A}t/ and /c\textipa{O}t/ would not be completely indistinguishable, but the two words would be _highly_ confusable.
+\setlength{\parskip}{0pt}
+
+Our approach compares the perceptual distinguishability of each word and _all_ other words in the lexicon (the present implementation: all words with the same number of phonemes), avoiding this problem. To illustrate how this changes the operationalization of functional load, we compared token-based functional load of the /g/-/k/ contrast under two different assumptions: one in which only minimal pairs were considered neighbors and one in which all the words in the lexicon were considered. When our model only used minimal pairs as neighbors (i.e. for each $w_{i}$ in (\ref{eq:fwnpr}), $L$ was restricted to $w_{i}$ and its /g/-/k/ minimal pairs), words containing /g/ or /k/ had a mean probability of misrecognition of 0.023; when the model used all non-minimal pair neighbors of the same length (as we do in the rest of this paper), misrecognition increased to a probability of 0.064, corresponding to a three-fold increase in odds.
+
+## Functional load depends on a complex interaction of elements
+
+Our definition of functional load does predicts interactions between a contrast's perceptual distinguishability and its distribution across words and neighbors in the lexicon. In this section, we first highlight the differences in predictions between our type- and token-based accounts. We then demonstrate how perceptual confusability, distribution of the phones in the lexicon, and the interactions between the two are predicted to affect functional load.  Figure (\ref{fig:big_graph}) demonstrates the outcomes of these complex relationships for 20 randomly chosen phonemic contrasts. Both type- and token-based functional load are plotted against the number of minimal pairs formed by each contrast. The red lines represent how sensitive that contrast's functional load is to \emph{a priori} perceptual confusability. The red dots represent a contrast's functional load, had its phones been completely perceptually distinguishable to begin with. In general, we would expect that contrasts with low \emph{a priori} perceptual confusability would be less sensitive to eliminating this confusability, as they are already closer to perfect distinguishability.
+
+We see first that type- and token-based accounts of functional load differ noticeably in their estimates of functional load. Figure (\ref{fig:big_graph}) shows a fairly linear relationship between type-based functional load and the traditional measure, and although this relationship becomes less clear with more contrasts (not pictured), the token-based account is noticeably less correlated with the number of minimal pairs.  This difference makes sense: type-based functional load and the number of minimal pairs a contrast separates both emphasize word types. However, it also serves as a demonstration that lexical-phonological environments are not generally uniform across words of different frequencies--further evidence that choosing between type- vs. token- approaches should be a matter of careful consideration [e.g. for token-based accounts: @hockett1955manual; @martinet1952function;  or type-based: @wedel2013high].
+
+Secondly, there are contrasts whose functional loads seem to be determined more by their initial perceptual distinguishability, or possibly by how they are distributed across non-minimal pair neighbors. Although the /t/-/m/ contrast does not separate many minimal pairs, the type-based account predicts that a merger would be unlikely, possibly due to the low _a priori_ perceptual confusability of the phones. A benefit of our model is that it allows the researcher to ask questions about how the lexicon and phonological system interact; exactly how these contribute to a contrast's functional load can be teased apart.
+
+Third, although the functional loads of naturally confusable contrasts are generally more sensitive to perceptual changes, there are exceptions to this pattern. For example, the functional load for the most perceptually confusable contrast, /u/-/\textipa{U}/ ("UW-UH" in Figure \ref{fig:big_graph}), hardly increases at all when the original contrast is made less confusable. Even if this phonemic contrast were conveyed with perfect clarity, it would not drastically change how accurately words are recognized. This suggests that the functional load of the /u/-/\textipa{U}/ contrast is more a product of its distribution in the lexicon than its perceptual confusability.
+
+Finally, type- and token-based accounts also vary in how sensitive the functional load of their contrasts are to their _a priori_ perceptual confusability. For example, the /\textipa{\ae}/-/\textipa{E}/ contrast ("AE-EH" in Figure \ref{fig:big_graph}), has high _a priori_ perceptual confusability.  The token-based functional load of this contrast increases only slightly when the contrast is made perfectly perceptually distinct, demonstrating a relative robustness to initial perceptual confusability. However, the type-based functional load of the same contrast shows the _most_ sensitivity to initial perceptual confusability.  The fact that the weighting of lexical frequency can modulate how perceptual contributions affect our model's functional load suggests that in addition to capturing the impact of perceptual and lexical factors impact individually, our model also captures their interactions. \setlength{\parskip}{0pt}
+
+# Evaluating our new definition
+
+Although our definition of functional load has been built on a model of spoken word recognition that is known to work well in predicting human data [@luce1998recognizing], the question has been left open of whether this operationalization is actually a good predictor of sound change.  If the previously observed effects of functional load on sound change are indeed relevant to a contrast's functional contribution to spoken word recognition, then we expect that models such as ours should be successful in predicting mergers.
+
+In order to evaluate performance, we compare the functional load of actual attested mergers with randomly chosen phonological mergers in similar environments. The logic here is that the if high functional load prevents mergers\footnote{Low functional load \emph{driving} mergers and high functional load \emph{preventing} mergers are two separate hypotheses. In practice, they are hard to distinguish, and doing so is not the purpose of the current paper. Rather, we seek to assess whether our functional load measure is a good predictor of mergers compared to the standard notion.}, we would expect to see that attested mergers have significantly less functional load than random hypothetical mergers.
+
+## Methods
+
+To get the most accurate sense of a merger's functional load, we need to calculate it in the environment of the language in which it is taking place.  Because our model is based on American English, we limit ourselves to mergers that are currently taking place in varieties of American English. The attested vowel mergers here represent the four most attested vowel mergers in North America [@labov2006atlas]\footnote{Labov et al. (2006) also mention that there is preliminary evidence for five more possible mergers in North American English before /l/, but note that these require further study.}: the \emph{caught-cot} merger (also known as the "low back merger") is a environment-independent (in this model) merger of /\textipa{A}/ and /\textipa{O}/. The \emph{fool-full} merger merges /u/ and /\textipa{U}/ before /l/, the \emph{pin-pen} merger merges /\textipa{I}/-/\textipa{E}/ before nasals, and the \emph{still-steel} merger merges /\textipa{I}/-/i/ before /l/. Consonant mergers in English are much more rare, and the consonant mergers here represent the two most straightforward attested mergers in varieties of American English we could find. The "think-fink" merger (\emph{th-fronting}) merges dental fricatives and labiodental fricatives, and the "thin-tin" merger (\emph{th-stopping}) merges dental fricatives and dental plosives.
+
+To compare the functional load of attested mergers with random mergers, we compare each attested merger with 20 randomly chosen phonological mergers that take place in the same phonetic environments as the attested mergers. For example, the _pin-pen merger_ merges /\textipa{I}/-/\textipa{E}/ before nasals; to compare, we chose 20 random vowel contrasts and merged them before nasals as well. The contrasts in the hypothetical mergers were chosen by randomly sampling all possible pairings of phonemes, the only constraint being that only vowels were considered for comparison to attested vowel mergers and only consononants for the attested consonant mergers\footnote{Limiting the comparison to, say, only mergers that are attested in other languages, would have introduced elements of cirularity into the logic of our test.  It is possible that contrasts have merged \emph{because} they have low functional load to begin with.}.
+
+Using a kernel density estimate calculated from the distribution of random mergers, we calculate the probability that a sample drawn from the distribution of theoretically possible similar mergers would have a functional load less than or equal to that of the attested merger. Attested mergers should have lower functional load than theoretical mergers, as they have actually happened in various dialects of American English. Figure (\ref{fig:comparison_graph}) compares our models to a traditional measure, the number of minimal pairs erased by a contrast.
+
+## Results
+
+As shown in Figure (\ref{fig:comparison_graph}), both of our models outperform the traditional measure for at least four of the six mergers. The type-based model predicts each attested merger relatively well: with the exception of the _still-steel_ merger (which no measure was able to predict), the type-based model predicts each attested merger with at least p<0.3. Although the token-based model performs relatively well for the rest of the six, _TH-stopping_ and _TH-fronting_ have higher-than-average token-based functional loads compared to the random mergers. The only merger the number of minimal pairs predicts better than both of our models is for _TH-fronting_, and its performance over the type-based model is relatively small (p<0.06 vs. p<0.11).  Both of our models predict the attested mergers better numerically than the traditional measure for all four of the vowel mergers, though for the _still-steel_ merger the type-based model and the traditional measure are practically identical (p<0.76 vs. p<0.78).
+
+The difference is less clear when comparing the type- and token-based models.  Numerically, the token-based model outperforms the type-based model on the _caught-cot_, _pin-pen_, and _still-steel_ mergers, but for these mergers, the type-based model still does relatively well (p<0.15 for the _caught-cot_ merger and p<0.24 for the _pin-pen_ merger) or both models do poorly (for the _still-steel_ merger, token: p<0.46 vs type: p<0.78).  For the two mergers where the type-based model predicts the attested mergers better than the token-based model, it makes relatively accurate predictions while the token-based model does not predict the merger (for _TH-fronting_: p<0.11 vs. p<0.70, and for _TH-stopping_: p<0.00 vs. p<0.50). This could suggest that the type-based account of functional load better captures the pressures of sound change, but further testing is be required to make a more definitive comparison.
+
+# Discussion
+
+As more studies highlight the relationships between the lexicon, perceptual information, and language change [@ohala1993sound; @ohala1993phonetics; @hall2009probabilistic; @additin; @Kang2016], some have found that incorporating perceptual data into accounts of functional load can succeed where traditional measures cannot [@tsui2012tonal]. In this paper, we have incorporated key insights from speech perception with ideal observer models of word recognition to form a revised definition of functional load. Implementing this definition with a simple model, we find that it outperforms the traditional measure of functional load, and gives us new insight into the process of language change.
+
+For example, the type-based model's better confidence in predicting attested mergers compared to the token-based model tentatively suggests that misrecognizing meaning _types_ exerts more pressure on sound change than the average number of times one misrecognizes words (i.e. according to the frequency with which one encounters them).  These results are in line with @wedel2013high, insofar both argue against Martinet's [-@martinet1952function] claim that functional load should be determined by weighing words' functional contribution with their frequencies.
+
+## Future directions    
+
+We close by briefly discussing the simplifying assumptions of the present model, and how they can be addressed in future work. In the current study, perceptual confusability between two phonemes is calculated from a phoneme-to-phoneme confusion matrix, which simplifies phoneme recognition considerably. Unlike the smaller data set in @luce1998recognizing, the data from @cutler2004patterns was collected through a forced-choice task, with participants hearing only VC and CV syllables, and being only able to respond in kind. Although less constrained studies could offer more sophisticated behavioral data (e.g. including consonant clusters, etc.), experimentally collecting so much data can quickly become onerous.
+
+The benefits of using acoustic/perceptual information also go beyond what has been covered in the current paper.  For instance, it is worth noting that in all previous conceptions of functional load, phonological mergers have always been viewed as detrimental to recognition or to separating meanings, etc.  However, when considering how sound change could affect actual spoken message transmission, we realize that mergers could in theory _benefit_ communication.  Imagine for example, a phone that is important to communication--but easily confused with another important phone--merges with a relatively unimportant phone. If the process of merging moves the phone in question acoustically (and perceptually) away from its confusable competitor, then the gain in recognition could in theory outweigh the loss from merging.  In short, not all mergers of a phonemic contrast are equal: the direction in which a contrast merges should impact the system differently.  Our model can thus in principle be used to make predictions of about the specific acoustic outcome of merges, and these predictions can be tested against data. For example, in the _pin-pen_ merger, the result of the merger is generally closer to /\textipa{I}/ than /\textipa{E}/.  Does this direction have a lower functional load than a merger in the opposite direction?
+
+Additionally, ideal observer models predict word recognition based on contextual predictability---although we ignore contextual predictability in this paper, it would be relatively straight forward to incorporate it in future versions of the model, for example, via measures of average predictability.  Additionally, the model in the current paper analyzes _isolated_ spoken word recognition.  In the future, we could estimate word recognition in the context of sentences by incorporating _n_-gram frequencies from conversational corpora into the model. 
+
+# Acknowledgments 
+
+We would like to thank our three anonymous reviewers for their incredibly helpful feedback and suggestions in revising this paper.
+
+# References 
+\setlength{\parskip}{0pt}
+
+```{r}
+# References will be generated automatically by Pandoc and included here.
+# The following code is some latex to format the bibliography. Do not remove it.
+```
+
+\setlength{\parindent}{-0.1in} 
+\setlength{\leftskip}{0.125in}
+\setlength{\parskip}{8pt}
+\noindent
+
